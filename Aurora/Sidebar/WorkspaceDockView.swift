@@ -12,10 +12,8 @@ struct WorkspaceFooterView: View {
                 browserState.addTab(in: modelContext)
             } label: {
                 Image(systemName: "plus")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.hoverButton(size: .small))
 
             Spacer()
 

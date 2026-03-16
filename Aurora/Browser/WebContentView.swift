@@ -3,11 +3,11 @@ import AppKit
 
 struct ActiveWebViewRepresentable: NSViewRepresentable {
     let tabID: UUID
-    let spaceID: UUID
+    let profileID: UUID
 
     func makeNSView(context: Context) -> AuroraWebViewContainer {
         let container = AuroraWebViewContainer()
-        container.attachWebView(tabID: tabID, spaceID: spaceID)
+        container.attachWebView(tabID: tabID, profileID: profileID)
         return container
     }
 
@@ -37,8 +37,8 @@ final class AuroraWebViewContainer: NSView {
     }
 
     @MainActor
-    func attachWebView(tabID: UUID, spaceID: UUID) {
-        let webView = WebViewPool.shared.webView(for: tabID, spaceID: spaceID)
+    func attachWebView(tabID: UUID, profileID: UUID) {
+        let webView = WebViewPool.shared.webView(for: tabID, profileID: profileID)
         webView.navigationDelegate = BrowserState.shared
         webView.frame = bounds
         webView.autoresizingMask = [.width, .height]

@@ -86,8 +86,9 @@ final class BrowserState {
         activeTabID = id
         activeSpaceID = spaceID
 
+        guard let profileID = activeProfileID else { return }
         if !WebViewPool.shared.webViewExists(for: id) {
-            let webView = WebViewPool.shared.webView(for: id, spaceID: spaceID)
+            let webView = WebViewPool.shared.webView(for: id, profileID: profileID)
             webView.navigationDelegate = self
             let resolved = URLResolver.resolve(url)
             if resolved.scheme == "aurora" && resolved.host == "newtab" {
@@ -177,13 +178,13 @@ final class BrowserState {
     // MARK: - Navigation
 
     func navigateToURL(_ input: String) {
-        guard let tab = activeTab, let space = activeSpace else { return }
+        guard let tab = activeTab, let profileID = activeProfileID else { return }
         let url = URLResolver.resolve(input)
 
         tab.url = url.absoluteString
         tab.lastVisited = Date()
 
-        let webView = WebViewPool.shared.webView(for: tab.id, spaceID: space.id)
+        let webView = WebViewPool.shared.webView(for: tab.id, profileID: profileID)
 
         if url.scheme == "aurora" && url.host == "newtab" {
             webView.loadHTML(NewTabPageHTML.generate())
@@ -195,9 +196,9 @@ final class BrowserState {
     // MARK: - Web View State Sync
 
     func activeWebView() -> AuroraWebView? {
-        guard let tabID = activeTabID, let spaceID = activeSpaceID else { return nil }
+        guard let tabID = activeTabID, let profileID = activeProfileID else { return nil }
         guard WebViewPool.shared.webViewExists(for: tabID) else { return nil }
-        return WebViewPool.shared.webView(for: tabID, spaceID: spaceID)
+        return WebViewPool.shared.webView(for: tabID, profileID: profileID)
     }
 
     private func syncWebViewState() {

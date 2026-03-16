@@ -4,6 +4,7 @@ import Foundation
 final class WebViewPool {
     static let shared = WebViewPool()
 
+    /// One WKContextRef per Profile — all spaces in a profile share cookies/cache
     private var contexts: [UUID: WKContextRef] = [:]
     private var webViews: [UUID: AuroraWebView] = [:]
     private var lastAccessed: [UUID: Date] = [:]
@@ -12,31 +13,31 @@ final class WebViewPool {
 
     // MARK: - Context Management
 
-    func context(for spaceID: UUID) -> WKContextRef {
-        if let existing = contexts[spaceID] {
+    func context(for profileID: UUID) -> WKContextRef {
+        if let existing = contexts[profileID] {
             return existing
         }
         guard let ctx = aurora_context_create() else {
-            fatalError("[WebViewPool] Failed to create WKContext for space \(spaceID)")
+            fatalError("[WebViewPool] Failed to create WKContext for profile \(profileID)")
         }
-        contexts[spaceID] = ctx
+        contexts[profileID] = ctx
         return ctx
     }
 
-    func removeContext(for spaceID: UUID) {
-        if let ctx = contexts.removeValue(forKey: spaceID) {
+    func removeContext(for profileID: UUID) {
+        if let ctx = contexts.removeValue(forKey: profileID) {
             aurora_context_release(ctx)
         }
     }
 
     // MARK: - WebView Management
 
-    func webView(for tabID: UUID, spaceID: UUID) -> AuroraWebView {
+    func webView(for tabID: UUID, profileID: UUID) -> AuroraWebView {
         if let existing = webViews[tabID] {
             lastAccessed[tabID] = Date()
             return existing
         }
-        let ctx = context(for: spaceID)
+        let ctx = context(for: profileID)
         let view = AuroraWebView(contextRef: ctx)
         webViews[tabID] = view
         lastAccessed[tabID] = Date()

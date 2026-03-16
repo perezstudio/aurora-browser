@@ -211,18 +211,125 @@ void aurora_page_config_release(WKPageConfigurationRef config) {
 }
 
 // ---------------------------------------------------------------------------
+// Shared process pool cache — one pool per WKContextRef (i.e. per Space).
+// Sharing a pool across tabs in the same space ensures cookies, sessions,
+// and cached resources are visible to all tabs immediately.
+// ---------------------------------------------------------------------------
+static NSMutableDictionary *s_poolsByContext = nil;
+
+static id aurora_get_or_create_pool(WKContextRef context) {
+    Class poolClass = objc_getClass("WKProcessPool");
+    if (!poolClass) return nil;
+
+    if (!s_poolsByContext) {
+        s_poolsByContext = [NSMutableDictionary new];
+    }
+
+    NSValue *key = [NSValue valueWithPointer:context];
+    id pool = s_poolsByContext[key];
+    if (pool) return pool;
+
+    // Try _WKProcessPoolConfiguration for additional control
+    Class poolConfigClass = objc_getClass("_WKProcessPoolConfiguration");
+    if (poolConfigClass) {
+        id poolConfig = [[poolConfigClass alloc] init];
+
+        // processSwapsOnNavigation = NO — keep same process for all navigations
+        // within a tab (avoids re-triggering sandbox init on every navigation)
+        SEL setPSONSel = sel_registerName("setProcessSwapsOnNavigation:");
+        if ([poolConfig respondsToSelector:setPSONSel]) {
+            typedef void (*SetBoolFn)(id, SEL, BOOL);
+            ((SetBoolFn)objc_msgSend)(poolConfig, setPSONSel, NO);
+        }
+
+        // prewarmsProcessesAutomatically = YES — warm up WebContent process early
+        SEL setPrewarmSel = sel_registerName("setPrewarmsProcessesAutomatically:");
+        if ([poolConfig respondsToSelector:setPrewarmSel]) {
+            typedef void (*SetBoolFn)(id, SEL, BOOL);
+            ((SetBoolFn)objc_msgSend)(poolConfig, setPrewarmSel, YES);
+        }
+
+        // Create pool with configuration
+        SEL initWithConfigSel = sel_registerName("_initWithConfiguration:");
+        if ([poolClass instancesRespondToSelector:initWithConfigSel]) {
+            pool = ((id(*)(id, SEL, id))objc_msgSend)([poolClass alloc], initWithConfigSel, poolConfig);
+            fprintf(stderr, "[AuroraBridge] Created WKProcessPool with _WKProcessPoolConfiguration\n");
+        }
+    }
+
+    if (!pool) {
+        pool = [[poolClass alloc] init];
+        fprintf(stderr, "[AuroraBridge] Created WKProcessPool (default)\n");
+    }
+
+    s_poolsByContext[key] = pool;
+    return pool;
+}
+
+// ---------------------------------------------------------------------------
+// User script: strip <source> elements for AVIF/WEBP from <picture> tags.
+// The WebContent process sandbox prevents these codecs from decoding,
+// so we force the browser to use PNG/JPEG/SVG fallbacks instead.
+// ---------------------------------------------------------------------------
+static NSString *const kImageCompatScript = @
+    "(function(){"
+    "  'use strict';"
+    "  var unsupported = {'image/avif':1, 'image/webp':1};"
+    "  function strip(root){"
+    "    if(!root || !root.querySelectorAll) return;"
+    "    var ss = root.querySelectorAll('picture > source');"
+    "    for(var i=0;i<ss.length;i++){"
+    "      if(unsupported[ss[i].getAttribute('type')]) ss[i].remove();"
+    "    }"
+    "  }"
+    "  strip(document);"
+    "  new MutationObserver(function(ms){"
+    "    for(var i=0;i<ms.length;i++){"
+    "      var added=ms[i].addedNodes;"
+    "      for(var j=0;j<added.length;j++){"
+    "        var n=added[j];"
+    "        if(n.nodeType!==1) continue;"
+    "        if(n.nodeName==='SOURCE' && n.parentNode && n.parentNode.nodeName==='PICTURE'){"
+    "          if(unsupported[n.getAttribute('type')]) n.remove();"
+    "        } else { strip(n); }"
+    "      }"
+    "    }"
+    "  }).observe(document.documentElement||document,{childList:true,subtree:true});"
+    "})();";
+
+static void aurora_inject_user_scripts(id config) {
+    SEL uccSel = sel_registerName("userContentController");
+    if (![config respondsToSelector:uccSel]) return;
+    id ucc = ((id(*)(id, SEL))objc_msgSend)(config, uccSel);
+    if (!ucc) return;
+
+    Class scriptClass = objc_getClass("WKUserScript");
+    if (!scriptClass) return;
+
+    // WKUserScriptInjectionTimeAtDocumentEnd = 1 (need DOM to exist)
+    SEL initSel = sel_registerName("initWithSource:injectionTime:forMainFrameOnly:");
+    if (![scriptClass instancesRespondToSelector:initSel]) return;
+
+    id script = ((id(*)(id, SEL, id, NSInteger, BOOL))objc_msgSend)(
+        [scriptClass alloc], initSel, kImageCompatScript, 1 /* AtDocumentEnd */, NO);
+
+    SEL addScriptSel = sel_registerName("addUserScript:");
+    if ([ucc respondsToSelector:addScriptSel]) {
+        ((void(*)(id, SEL, id))objc_msgSend)(ucc, addScriptSel, script);
+        fprintf(stderr, "[AuroraBridge] Injected image compat user script\n");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // View creation — uses WKWebView via ObjC runtime (no import WebKit).
 // WKView is broken on macOS 26+, so we use WKWebView and extract the
 // internal WKPageRef via private SPI for C API page operations.
-// Per-Space process isolation uses separate WKProcessPool instances.
+// Per-Space process isolation uses one shared WKProcessPool per context.
 // ---------------------------------------------------------------------------
 
 void *aurora_view_create_with_context(WKContextRef context) {
-    (void)context; // WKWebView manages its own process pool
-
     Class WKWebViewClass = objc_getClass("WKWebView");
     Class configClass = objc_getClass("WKWebViewConfiguration");
-    Class poolClass = objc_getClass("WKProcessPool");
 
     if (!WKWebViewClass || !configClass) {
         fprintf(stderr, "[AuroraBridge] ERROR: WKWebView or WKWebViewConfiguration class not found\n");
@@ -232,17 +339,60 @@ void *aurora_view_create_with_context(WKContextRef context) {
     @try {
         id config = [[configClass alloc] init];
 
-        // Set a unique process pool per Space for isolation
-        if (poolClass) {
-            id pool = [[poolClass alloc] init];
+        // Share process pool per Space (context) for cookie/session sharing
+        id pool = aurora_get_or_create_pool(context);
+        if (pool) {
             SEL setPoolSel = sel_registerName("setProcessPool:");
             if ([config respondsToSelector:setPoolSel]) {
                 typedef void (*SetPoolFn)(id, SEL, id);
                 ((SetPoolFn)objc_msgSend)(config, setPoolSel, pool);
             }
-            // Keep pool alive via associated object on config
-            objc_setAssociatedObject(config, "AuroraProcessPool", pool, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
+
+        // Enable JavaScript and media playback on the preferences
+        SEL prefsSel = sel_registerName("preferences");
+        if ([config respondsToSelector:prefsSel]) {
+            typedef id (*PrefsFn)(id, SEL);
+            id prefs = ((PrefsFn)objc_msgSend)(config, prefsSel);
+            if (prefs) {
+                // Enable JavaScript
+                SEL jsEnabledSel = sel_registerName("setJavaScriptEnabled:");
+                if ([prefs respondsToSelector:jsEnabledSel]) {
+                    typedef void (*SetBoolFn)(id, SEL, BOOL);
+                    ((SetBoolFn)objc_msgSend)(prefs, jsEnabledSel, YES);
+                }
+                // Enable JavaScript markup (for inline event handlers etc.)
+                SEL jsMarkupSel = sel_registerName("_setJavaScriptMarkupEnabled:");
+                if ([prefs respondsToSelector:jsMarkupSel]) {
+                    typedef void (*SetBoolFn)(id, SEL, BOOL);
+                    ((SetBoolFn)objc_msgSend)(prefs, jsMarkupSel, YES);
+                }
+            }
+        }
+
+        // Set default webpage preferences to allow JavaScript
+        SEL defaultPrefsSel = sel_registerName("setDefaultWebpagePreferences:");
+        Class wpPrefsClass = objc_getClass("WKWebpagePreferences");
+        if (wpPrefsClass && [config respondsToSelector:defaultPrefsSel]) {
+            id wpPrefs = [[wpPrefsClass alloc] init];
+            SEL allowJSSel = sel_registerName("setAllowsContentJavaScript:");
+            if ([wpPrefs respondsToSelector:allowJSSel]) {
+                typedef void (*SetBoolFn)(id, SEL, BOOL);
+                ((SetBoolFn)objc_msgSend)(wpPrefs, allowJSSel, YES);
+            }
+            typedef void (*SetPrefsFn)(id, SEL, id);
+            ((SetPrefsFn)objc_msgSend)(config, defaultPrefsSel, wpPrefs);
+        }
+
+        // Allow media playback without user gesture (for video/audio on pages)
+        SEL mediaPlaybackSel = sel_registerName("setMediaTypesRequiringUserActionForPlayback:");
+        if ([config respondsToSelector:mediaPlaybackSel]) {
+            typedef void (*SetMediaFn)(id, SEL, NSUInteger);
+            ((SetMediaFn)objc_msgSend)(config, mediaPlaybackSel, 0); // WKAudiovisualMediaTypeNone
+        }
+
+        // Inject user scripts for image format compatibility
+        aurora_inject_user_scripts(config);
 
         id allocated = [WKWebViewClass alloc];
         SEL sel = sel_registerName("initWithFrame:configuration:");
@@ -251,6 +401,14 @@ void *aurora_view_create_with_context(WKContextRef context) {
         id wkWebView = ((InitFn)objc_msgSend)(allocated, sel, frame, config);
 
         if (wkWebView) {
+            // Set custom user agent to match Safari
+            SEL setUASel = sel_registerName("setCustomUserAgent:");
+            if ([wkWebView respondsToSelector:setUASel]) {
+                NSString *safariUA = @"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15";
+                typedef void (*SetUAFn)(id, SEL, id);
+                ((SetUAFn)objc_msgSend)(wkWebView, setUASel, safariUA);
+                fprintf(stderr, "[AuroraBridge] Custom Safari user agent set\n");
+            }
             // Enable Web Inspector (macOS 13.3+)
             SEL inspectableSel = sel_registerName("setInspectable:");
             if ([wkWebView respondsToSelector:inspectableSel]) {

@@ -1,4 +1,5 @@
 import AppKit
+import WebKit
 
 protocol AuroraWebViewNavigationDelegate: AnyObject {
     func webView(_ webView: AuroraWebView, didUpdateURL url: String?)
@@ -12,8 +13,10 @@ protocol AuroraWebViewNavigationDelegate: AnyObject {
 final class AuroraWebView: NSView {
     private var wkViewPtr: UnsafeMutableRawPointer?
     private var wkView: NSView?
+    private var wkWebView: WKWebView?  // Typed reference for delegate support
     private var pageRef: WKPageRef?
     private var pollTimer: Timer?
+    private var wkNavigationHandler: WebViewNavigationHandler?
 
     /// Whether we have a valid C API page ref (may be nil if WKWebView SPI doesn't expose it)
     private var hasPageRef: Bool { pageRef != nil }
@@ -50,6 +53,15 @@ final class AuroraWebView: NSView {
         view.frame = bounds
         addSubview(view)
         wkView = view
+
+        // Set WKNavigationDelegate for crash recovery and proper navigation handling
+        if let webView = view as? WKWebView {
+            wkWebView = webView
+            let handler = WebViewNavigationHandler(owner: self)
+            wkNavigationHandler = handler
+            webView.navigationDelegate = handler
+            webView.uiDelegate = handler
+        }
 
         startPollingState()
     }
@@ -233,5 +245,44 @@ final class AuroraWebView: NSView {
             canGoForward = newCanGoForward
             navigationDelegate?.webView(self, didUpdateCanGoForward: newCanGoForward)
         }
+    }
+}
+
+// MARK: - WKNavigationDelegate & WKUIDelegate handler
+
+/// Handles WKWebView navigation events, including WebContent process crash recovery.
+final class WebViewNavigationHandler: NSObject, WKNavigationDelegate, WKUIDelegate {
+    weak var owner: AuroraWebView?
+
+    init(owner: AuroraWebView) {
+        self.owner = owner
+        super.init()
+    }
+
+    // MARK: - Process Crash Recovery
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        NSLog("[AuroraWebView] WebContent process terminated — reloading page")
+        webView.reload()
+    }
+
+    // MARK: - Navigation Delegate
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        decisionHandler(.allow)
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        decisionHandler(.allow)
+    }
+
+    // MARK: - UI Delegate (handle target="_blank" links)
+
+    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        // Open target="_blank" links in the same view
+        if navigationAction.targetFrame == nil {
+            webView.load(navigationAction.request)
+        }
+        return nil
     }
 }

@@ -35,10 +35,8 @@ struct SidebarToolbarView: View {
                 NotificationCenter.default.post(name: .toggleSidebar, object: nil)
             } label: {
                 Image(systemName: "sidebar.leading")
-                    .font(.system(size: 14))
-                    .foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.hoverButton(size: .large))
         }
         .padding(.horizontal, 12)
     }

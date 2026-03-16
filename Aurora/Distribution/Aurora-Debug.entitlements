@@ -10,5 +10,17 @@
 	<true/>
 	<key>com.apple.security.network.client</key>
 	<true/>
+	<key>com.apple.developer.web-browser-engine.rendering</key>
+	<true/>
+	<key>com.apple.developer.web-browser-engine.networking</key>
+	<true/>
+	<key>com.apple.developer.web-browser-engine.webcontent</key>
+	<true/>
+	<key>com.apple.developer.web-inspector</key>
+	<true/>
+	<key>com.apple.security.files.downloads.read-write</key>
+	<true/>
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
 </dict>
 </plist>

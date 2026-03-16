@@ -12,9 +12,8 @@ struct NavigationBarView: View {
                 browserState.activeWebView()?.goBack()
             } label: {
                 Image(systemName: "chevron.left")
-                    .font(.system(size: 14, weight: .medium))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.hoverButton(size: .large))
             .disabled(!browserState.canGoBack)
 
             // Forward
@@ -22,9 +21,8 @@ struct NavigationBarView: View {
                 browserState.activeWebView()?.goForward()
             } label: {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 14, weight: .medium))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.hoverButton(size: .large))
             .disabled(!browserState.canGoForward)
 
             // Reload / Stop
@@ -36,9 +34,8 @@ struct NavigationBarView: View {
                 }
             } label: {
                 Image(systemName: browserState.isLoading ? "xmark" : "arrow.clockwise")
-                    .font(.system(size: 12, weight: .medium))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.hoverButton(size: .large))
 
             // Address bar
             AddressBarView(text: $addressText, isFocused: $isAddressBarFocused) {
@@ -73,9 +70,9 @@ struct AddressBarView: View {
             .textFieldStyle(.plain)
             .font(.system(size: 13))
             .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .frame(height: 32)
             .background(
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: 6)
                     .fill(.quaternary)
             )
             .focused(isFocused)

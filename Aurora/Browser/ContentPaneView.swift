@@ -12,8 +12,8 @@ struct ContentPaneView: View {
                 ProgressBarView()
 
                 if let tabID = browserState.activeTabID,
-                   let spaceID = browserState.activeSpaceID {
-                    ActiveWebViewRepresentable(tabID: tabID, spaceID: spaceID)
+                   let profileID = browserState.activeProfileID {
+                    ActiveWebViewRepresentable(tabID: tabID, profileID: profileID)
                         .id(tabID)
                 } else {
                     EmptyContentView()
