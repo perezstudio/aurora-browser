@@ -2,12 +2,27 @@ import SwiftUI
 
 struct NavigationBarView: View {
     @Environment(BrowserState.self) private var browserState
+
+    var body: some View {
+        if let tab = browserState.activeTab {
+            NavigationBarContent(tab: tab)
+        } else {
+            HStack { Spacer() }
+                .frame(height: 48)
+        }
+    }
+}
+
+// MARK: - Content (uses @Bindable for reactive Tab properties)
+
+private struct NavigationBarContent: View {
+    @Bindable var tab: Tab
+    @Environment(BrowserState.self) private var browserState
     @State private var addressText: String = ""
     @FocusState private var isAddressBarFocused: Bool
 
     private var isDevMode: Bool {
-        guard let url = browserState.currentURL else { return false }
-        return url.contains("localhost") || url.contains("127.0.0.1")
+        tab.url.contains("localhost") || tab.url.contains("127.0.0.1")
     }
 
     var body: some View {
@@ -19,7 +34,7 @@ struct NavigationBarView: View {
                 Image(systemName: "chevron.left")
             }
             .buttonStyle(.hoverButton(size: .large))
-            .disabled(!browserState.canGoBack)
+            .disabled(!tab.canGoBack)
 
             // Forward
             Button {
@@ -28,17 +43,17 @@ struct NavigationBarView: View {
                 Image(systemName: "chevron.right")
             }
             .buttonStyle(.hoverButton(size: .large))
-            .disabled(!browserState.canGoForward)
+            .disabled(!tab.canGoForward)
 
             // Reload / Stop
             Button {
-                if browserState.isLoading {
+                if tab.isLoading {
                     browserState.activeWebView()?.stopLoading()
                 } else {
                     browserState.activeWebView()?.reload()
                 }
             } label: {
-                Image(systemName: browserState.isLoading ? "xmark" : "arrow.clockwise")
+                Image(systemName: tab.isLoading ? "xmark" : "arrow.clockwise")
             }
             .buttonStyle(.hoverButton(size: .large))
 
@@ -49,9 +64,9 @@ struct NavigationBarView: View {
 
             // Copy URL
             Button {
-                if let url = browserState.currentURL, !url.isEmpty, url != "aurora://newtab" {
+                if !tab.url.isEmpty, tab.url != "aurora://newtab" {
                     NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(url, forType: .string)
+                    NSPasteboard.general.setString(tab.url, forType: .string)
                 }
             } label: {
                 Image(systemName: "doc.on.doc")
@@ -89,15 +104,18 @@ struct NavigationBarView: View {
             Spacer()
         }
         .padding(.horizontal, 12)
-        .onChange(of: browserState.currentURL) { _, newURL in
+        .onAppear {
+            addressText = cleanDisplayURL(tab.url)
+        }
+        .onChange(of: tab.url) { _, newURL in
             if !isAddressBarFocused {
                 addressText = cleanDisplayURL(newURL)
             }
         }
     }
 
-    private func cleanDisplayURL(_ url: String?) -> String {
-        guard let url, url != "aurora://newtab" else { return "" }
+    private func cleanDisplayURL(_ url: String) -> String {
+        guard url != "aurora://newtab" else { return "" }
         return url
     }
 }

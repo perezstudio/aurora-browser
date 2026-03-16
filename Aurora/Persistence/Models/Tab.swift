@@ -13,6 +13,12 @@ final class Tab {
 
     var space: Space?
 
+    // Transient WebView state — not persisted, observed by SwiftUI via @Bindable
+    @Transient var isLoading: Bool = false
+    @Transient var estimatedProgress: Double = 0.0
+    @Transient var canGoBack: Bool = false
+    @Transient var canGoForward: Bool = false
+
     init(
         id: UUID = UUID(),
         url: String = "aurora://newtab",

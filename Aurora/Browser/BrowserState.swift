@@ -13,21 +13,8 @@ final class BrowserState {
     var activeSpaceID: UUID?
     var activeTabID: UUID?
 
-    /// Derived from the active space's owning profile — no manual tracking needed
-    var activeProfileID: UUID? {
-        activeSpace?.profile?.id
-    }
-
     // Bookmark visibility per space
     var bookmarksVisiblePerSpace: [UUID: Bool] = [:]
-
-    // Current page state (synced from active AuroraWebView)
-    var currentURL: String?
-    var currentTitle: String?
-    var isLoading: Bool = false
-    var estimatedProgress: Double = 0.0
-    var canGoBack: Bool = false
-    var canGoForward: Bool = false
 
     // UI state
     var isCommandBarVisible: Bool = false
@@ -41,10 +28,8 @@ final class BrowserState {
         let profileDescriptor = FetchDescriptor<Profile>()
         profiles = (try? modelContext.fetch(profileDescriptor)) ?? []
 
-        // Load ALL spaces from ALL profiles
         spaces = profiles.flatMap(\.spaces).sorted { $0.order < $1.order }
 
-        // Restore active space and first tab
         if let first = spaces.first {
             activeSpaceID = first.id
             if let firstTab = first.tabs.sorted(by: { $0.order < $1.order }).first {
@@ -53,24 +38,37 @@ final class BrowserState {
         }
     }
 
-    /// Rebuild the spaces array from all profiles (call after adding/removing spaces)
     func reloadSpaces() {
         spaces = profiles.flatMap(\.spaces).sorted { $0.order < $1.order }
     }
 
-    // MARK: - Active Profile / Space / Tab
+    // MARK: - Derived State (all from Tab → Space → Profile)
 
-    var activeProfile: Profile? {
-        profiles.first { $0.id == activeProfileID }
+    var activeTab: Tab? {
+        activeSpace?.tabs.first { $0.id == activeTabID }
     }
 
     var activeSpace: Space? {
         spaces.first { $0.id == activeSpaceID }
     }
 
-    var activeTab: Tab? {
-        activeSpace?.tabs.first { $0.id == activeTabID }
+    var activeProfile: Profile? {
+        activeSpace?.profile
     }
+
+    var activeProfileID: UUID? {
+        activeProfile?.id
+    }
+
+    /// Returns the active tab's WebView if it exists in the pool.
+    func activeWebView() -> AuroraWebView? {
+        guard let tabID = activeTabID else { return nil }
+        guard WebViewPool.shared.webViewExists(for: tabID) else { return nil }
+        guard let profileID = activeTab?.space?.profile?.id else { return nil }
+        return WebViewPool.shared.webView(for: tabID, profileID: profileID)
+    }
+
+    // MARK: - Selection
 
     func selectSpace(_ space: Space) {
         activeSpaceID = space.id
@@ -79,33 +77,23 @@ final class BrowserState {
         } else {
             activeTabID = nil
         }
-        syncWebViewState()
-        NotificationCenter.default.post(name: .activeTabChanged, object: nil)
     }
 
     func selectTab(_ tab: Tab) {
         activeTabID = tab.id
-        syncWebViewState()
-        NotificationCenter.default.post(name: .activeTabChanged, object: nil)
     }
 
     // MARK: - Bookmark / Pin Activation
 
-    /// Opens a bookmark or pinned tab. Finds an existing tab with that URL
-    /// in the current space, or creates a new tab and navigates to it.
     func activateBookmarkOrPin(url: String, in spaceID: UUID) {
         activeSpaceID = spaceID
-        guard let space = activeSpace, let profileID = activeProfileID else { return }
+        guard let space = activeSpace else { return }
 
-        // Check if there's already a tab with this URL in this space
         if let existing = space.tabs.first(where: { $0.url == url }) {
             activeTabID = existing.id
-            syncWebViewState()
-            NotificationCenter.default.post(name: .activeTabChanged, object: nil)
             return
         }
 
-        // Create a new tab for this content
         let modelContext = PersistenceController.shared.container.mainContext
         let maxOrder = space.tabs.map(\.order).max() ?? -1
         let tab = Tab(url: url, title: url, order: maxOrder + 1)
@@ -116,7 +104,7 @@ final class BrowserState {
 
         activeTabID = tab.id
 
-        // Create and navigate the web view
+        guard let profileID = tab.space?.profile?.id else { return }
         let webView = WebViewPool.shared.webView(for: tab.id, profileID: profileID)
         webView.navigationDelegate = self
         let resolved = URLResolver.resolve(url)
@@ -125,9 +113,6 @@ final class BrowserState {
         } else {
             webView.load(url: resolved)
         }
-
-        syncWebViewState()
-        NotificationCenter.default.post(name: .activeTabChanged, object: nil)
     }
 
     // MARK: - Tab Management
@@ -142,33 +127,27 @@ final class BrowserState {
         try? modelContext.save()
 
         activeTabID = tab.id
-        NotificationCenter.default.post(name: .activeTabChanged, object: nil)
     }
 
     func closeTab(_ tab: Tab, in modelContext: ModelContext) {
         guard let space = activeSpace else { return }
         let tabID = tab.id
 
-        // Remove web view from pool and notify container to detach the subview
         WebViewPool.shared.removeWebView(for: tabID)
         NotificationCenter.default.post(name: .tabClosed, object: tabID)
 
-        // Remove from space
         space.tabs.removeAll { $0.id == tabID }
         modelContext.delete(tab)
         try? modelContext.save()
 
-        // Select another tab
         if activeTabID == tabID {
             if let next = space.tabs.sorted(by: { $0.order < $1.order }).first {
                 activeTabID = next.id
             } else {
-                // Last tab closed — create a new one
                 addTab(in: modelContext)
                 return
             }
         }
-        NotificationCenter.default.post(name: .activeTabChanged, object: nil)
     }
 
     func closeActiveTab(in modelContext: ModelContext) {
@@ -179,7 +158,6 @@ final class BrowserState {
     // MARK: - Workspace Management
 
     func createSpace(name: String, colorHex: String, iconName: String, in modelContext: ModelContext) {
-        // Attach to the active space's profile, or fall back to first profile
         let profile = activeProfile ?? profiles.first
         guard let profile else { return }
         let maxOrder = spaces.map(\.order).max() ?? -1
@@ -209,13 +187,14 @@ final class BrowserState {
     // MARK: - Navigation
 
     func navigateToURL(_ input: String) {
-        guard let tab = activeTab, let profileID = activeProfileID else { return }
+        guard let tab = activeTab else { return }
         let url = URLResolver.resolve(input)
 
         tab.url = url.absoluteString
         tab.lastVisited = Date()
         PersistenceController.shared.save()
 
+        guard let profileID = tab.space?.profile?.id else { return }
         let webView = WebViewPool.shared.webView(for: tab.id, profileID: profileID)
 
         if url.scheme == "aurora" && url.host == "newtab" {
@@ -225,31 +204,11 @@ final class BrowserState {
         }
     }
 
-    // MARK: - Web View State Sync
+    // MARK: - Tab Lookup
 
-    func activeWebView() -> AuroraWebView? {
-        guard let tabID = activeTabID, let profileID = activeProfileID else { return nil }
-        guard WebViewPool.shared.webViewExists(for: tabID) else { return nil }
-        return WebViewPool.shared.webView(for: tabID, profileID: profileID)
-    }
-
-    private func syncWebViewState() {
-        guard let webView = activeWebView() else {
-            currentURL = nil
-            currentTitle = nil
-            isLoading = false
-            estimatedProgress = 0
-            canGoBack = false
-            canGoForward = false
-            return
-        }
-
-        currentURL = webView.currentURL
-        currentTitle = webView.currentTitle
-        isLoading = webView.isPageLoading
-        estimatedProgress = webView.estimatedProgress
-        canGoBack = webView.canGoBack
-        canGoForward = webView.canGoForward
+    /// Find a tab by ID across all spaces.
+    func tab(for tabID: UUID) -> Tab? {
+        spaces.flatMap(\.tabs).first { $0.id == tabID }
     }
 }
 
@@ -258,9 +217,8 @@ final class BrowserState {
 extension BrowserState: AuroraWebViewNavigationDelegate {
     nonisolated func webView(_ webView: AuroraWebView, didUpdateURL url: String?) {
         MainActor.assumeIsolated {
-            currentURL = url
-            // Persist URL to SwiftData
-            if let tab = activeTab, let url, !url.isEmpty {
+            guard let tab = activeTab, isActiveWebView(webView) else { return }
+            if let url, !url.isEmpty {
                 tab.url = url
                 tab.lastVisited = Date()
                 PersistenceController.shared.save()
@@ -270,8 +228,8 @@ extension BrowserState: AuroraWebViewNavigationDelegate {
 
     nonisolated func webView(_ webView: AuroraWebView, didUpdateTitle title: String?) {
         MainActor.assumeIsolated {
-            currentTitle = title
-            if let tab = activeTab, let title, !title.isEmpty {
+            guard let tab = activeTab, isActiveWebView(webView) else { return }
+            if let title, !title.isEmpty {
                 tab.title = title
                 PersistenceController.shared.save()
             }
@@ -280,25 +238,36 @@ extension BrowserState: AuroraWebViewNavigationDelegate {
 
     nonisolated func webView(_ webView: AuroraWebView, didUpdateLoading isLoading: Bool) {
         MainActor.assumeIsolated {
-            self.isLoading = isLoading
+            guard let tab = activeTab, isActiveWebView(webView) else { return }
+            tab.isLoading = isLoading
         }
     }
 
     nonisolated func webView(_ webView: AuroraWebView, didUpdateProgress progress: Double) {
         MainActor.assumeIsolated {
-            estimatedProgress = progress
+            guard let tab = activeTab, isActiveWebView(webView) else { return }
+            tab.estimatedProgress = progress
         }
     }
 
     nonisolated func webView(_ webView: AuroraWebView, didUpdateCanGoBack canGoBack: Bool) {
         MainActor.assumeIsolated {
-            self.canGoBack = canGoBack
+            guard let tab = activeTab, isActiveWebView(webView) else { return }
+            tab.canGoBack = canGoBack
         }
     }
 
     nonisolated func webView(_ webView: AuroraWebView, didUpdateCanGoForward canGoForward: Bool) {
         MainActor.assumeIsolated {
-            self.canGoForward = canGoForward
+            guard let tab = activeTab, isActiveWebView(webView) else { return }
+            tab.canGoForward = canGoForward
         }
+    }
+
+    private func isActiveWebView(_ webView: AuroraWebView) -> Bool {
+        guard let tabID = activeTabID else { return false }
+        guard WebViewPool.shared.webViewExists(for: tabID) else { return false }
+        guard let profileID = activeTab?.space?.profile?.id else { return false }
+        return WebViewPool.shared.webView(for: tabID, profileID: profileID) === webView
     }
 }
