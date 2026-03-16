@@ -5,6 +5,11 @@ struct NavigationBarView: View {
     @State private var addressText: String = ""
     @FocusState private var isAddressBarFocused: Bool
 
+    private var isDevMode: Bool {
+        guard let url = browserState.currentURL else { return false }
+        return url.contains("localhost") || url.contains("127.0.0.1")
+    }
+
     var body: some View {
         HStack(spacing: 8) {
             // Back
@@ -40,6 +45,45 @@ struct NavigationBarView: View {
             // Address bar
             AddressBarView(text: $addressText, isFocused: $isAddressBarFocused) {
                 browserState.navigateToURL(addressText)
+            }
+
+            // Copy URL
+            Button {
+                if let url = browserState.currentURL, !url.isEmpty, url != "aurora://newtab" {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(url, forType: .string)
+                }
+            } label: {
+                Image(systemName: "doc.on.doc")
+            }
+            .buttonStyle(.hoverButton(size: .large))
+            .help("Copy URL")
+
+            // Developer mode buttons (visible for localhost URLs)
+            if isDevMode {
+                Button {
+                    browserState.activeWebView()?.toggleInspector()
+                } label: {
+                    Image(systemName: "hammer")
+                }
+                .buttonStyle(.hoverButton(size: .large))
+                .help("Web Inspector")
+
+                Button {
+                    browserState.activeWebView()?.showInspector()
+                } label: {
+                    Image(systemName: "network")
+                }
+                .buttonStyle(.hoverButton(size: .large))
+                .help("Network")
+
+                Button {
+                    browserState.activeWebView()?.showInspector()
+                } label: {
+                    Image(systemName: "terminal")
+                }
+                .buttonStyle(.hoverButton(size: .large))
+                .help("Console")
             }
 
             Spacer()

@@ -17,8 +17,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Follow system appearance (light/dark)
         NSApp.appearance = nil
 
-        // Disable window restoration
-        UserDefaults.standard.set(true, forKey: "NSQuitAlwaysKeepsWindows")
+        // Disable window restoration (false = don't keep windows on quit)
+        UserDefaults.standard.set(false, forKey: "NSQuitAlwaysKeepsWindows")
 
         // Build menus first (before window creation)
         buildMainMenu()
@@ -112,6 +112,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About Aurora", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
+        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettingsAction(_:)), keyEquivalent: ",")
+        appMenu.addItem(settingsItem)
+        appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit Aurora", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let appMenuItem = NSMenuItem()
         appMenuItem.submenu = appMenu
@@ -177,6 +180,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleInspectorAction(_ sender: Any?) {
         NotificationCenter.default.post(name: .toggleInspector, object: nil)
     }
+
+    @objc private func openSettingsAction(_ sender: Any?) {
+        SettingsWindowController.showSettings(modelContainer: PersistenceController.shared.container)
+    }
 }
 
 // MARK: - Notification Names
@@ -191,4 +198,5 @@ extension Notification.Name {
     static let activeTabChanged = Notification.Name("Aurora.activeTabChanged")
     static let toggleInspector = Notification.Name("Aurora.toggleInspector")
     static let toggleSidebar = Notification.Name("Aurora.toggleSidebar")
+    static let tabClosed = Notification.Name("Aurora.tabClosed")
 }

@@ -16,7 +16,14 @@ final class PersistenceController {
             HistoryEntry.self,
             Bookmark.self,
         ])
-        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+
+        // Store in Application Support/Aurora/Aurora.store
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let auroraDir = appSupport.appendingPathComponent("Aurora", isDirectory: true)
+        try? FileManager.default.createDirectory(at: auroraDir, withIntermediateDirectories: true)
+        let storeURL = auroraDir.appendingPathComponent("Aurora.store")
+
+        let configuration = ModelConfiguration("Aurora", schema: schema, url: storeURL)
 
         do {
             container = try ModelContainer(for: schema, configurations: [configuration])
@@ -73,5 +80,9 @@ final class PersistenceController {
         }
 
         try? context.save()
+    }
+
+    func save() {
+        try? container.mainContext.save()
     }
 }

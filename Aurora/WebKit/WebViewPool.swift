@@ -20,6 +20,11 @@ final class WebViewPool {
         guard let ctx = aurora_context_create() else {
             fatalError("[WebViewPool] Failed to create WKContext for profile \(profileID)")
         }
+        // Register the profile's stable UUID so the data store persists across launches
+        let uuidString = profileID.uuidString
+        uuidString.withCString { cStr in
+            aurora_context_set_profile_uuid(ctx, cStr)
+        }
         contexts[profileID] = ctx
         return ctx
     }

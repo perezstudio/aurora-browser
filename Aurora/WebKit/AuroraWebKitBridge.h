@@ -35,6 +35,10 @@ bool aurora_bridge_init(void);
 WKContextRef aurora_context_create(void);
 void aurora_context_release(WKContextRef context);
 
+// Associate a stable profile UUID with a context for persistent data store creation.
+// Must be called after aurora_context_create and before the first view is created.
+void aurora_context_set_profile_uuid(WKContextRef context, const char *uuidString);
+
 // Page configuration
 WKPageConfigurationRef aurora_page_config_create(WKContextRef context);
 void aurora_page_config_release(WKPageConfigurationRef config);

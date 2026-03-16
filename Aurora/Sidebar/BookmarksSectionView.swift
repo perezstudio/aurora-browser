@@ -6,16 +6,18 @@ struct BookmarksSectionView: View {
     let spaceID: UUID
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 2) {
             ForEach(bookmarks) { bookmark in
-                BookmarkRow(bookmark: bookmark, isActive: bookmark.id == browserState.activeTabID)
-                    .onTapGesture {
-                        browserState.activateContent(
-                            id: bookmark.id,
-                            url: bookmark.url,
-                            spaceID: spaceID
-                        )
-                    }
+                BookmarkRow(
+                    bookmark: bookmark,
+                    isActive: browserState.activeTab?.url == bookmark.url && browserState.activeSpaceID == spaceID
+                )
+                .onTapGesture {
+                    browserState.activateBookmarkOrPin(
+                        url: bookmark.url,
+                        in: spaceID
+                    )
+                }
             }
         }
     }
@@ -25,24 +27,39 @@ struct BookmarkRow: View {
     let bookmark: Bookmark
     let isActive: Bool
 
+    @State private var isHovered = false
+
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "bookmark")
+        HStack(spacing: 0) {
+            Image(systemName: "bookmark.fill")
                 .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(isActive ? .primary : .secondary)
+                .frame(width: 16)
 
             Text(bookmark.title)
-                .font(.system(size: 12))
+                .font(.system(size: 13))
                 .lineLimit(1)
+                .padding(.leading, 6)
 
             Spacer()
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(isActive ? .white.opacity(0.1) : .clear)
-        )
+        .frame(height: 32)
+        .background {
+            RoundedRectangle(cornerRadius: 5)
+                .fill(.bar)
+                .opacity(isActive ? 1 : 0)
+        }
+        .background {
+            RoundedRectangle(cornerRadius: 5)
+                .fill(Color.primary.opacity(0.08))
+                .opacity(!isActive && isHovered ? 1 : 0)
+        }
         .contentShape(Rectangle())
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovered = hovering
+            }
+        }
     }
 }

@@ -211,11 +211,81 @@ void aurora_page_config_release(WKPageConfigurationRef config) {
 }
 
 // ---------------------------------------------------------------------------
-// Shared process pool cache — one pool per WKContextRef (i.e. per Space).
-// Sharing a pool across tabs in the same space ensures cookies, sessions,
+// Shared process pool cache — one pool per WKContextRef (i.e. per Profile).
+// Sharing a pool across tabs in the same profile ensures cookies, sessions,
 // and cached resources are visible to all tabs immediately.
 // ---------------------------------------------------------------------------
 static NSMutableDictionary *s_poolsByContext = nil;
+
+// ---------------------------------------------------------------------------
+// Per-profile stable UUID registry — maps WKContextRef → NSUUID (profile ID).
+// Set by Swift via aurora_context_set_profile_uuid() so data stores persist
+// across app launches using the same identifier.
+// ---------------------------------------------------------------------------
+static NSMutableDictionary *s_profileUUIDsByContext = nil;
+
+void aurora_context_set_profile_uuid(WKContextRef context, const char *uuidString) {
+    if (!context || !uuidString) return;
+    if (!s_profileUUIDsByContext) {
+        s_profileUUIDsByContext = [NSMutableDictionary new];
+    }
+    NSString *str = [NSString stringWithUTF8String:uuidString];
+    NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:str];
+    if (uuid) {
+        NSValue *key = [NSValue valueWithPointer:context];
+        s_profileUUIDsByContext[key] = uuid;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-profile data store cache — one WKWebsiteDataStore per WKContextRef.
+// Each profile gets its own persistent data store keyed by the profile's
+// stable UUID, providing full cookie/localStorage/indexedDB isolation
+// that survives app restarts.
+// ---------------------------------------------------------------------------
+static NSMutableDictionary *s_dataStoresByContext = nil;
+
+static id aurora_get_or_create_data_store(WKContextRef context) {
+    Class dataStoreClass = objc_getClass("WKWebsiteDataStore");
+    if (!dataStoreClass) return nil;
+
+    if (!s_dataStoresByContext) {
+        s_dataStoresByContext = [NSMutableDictionary new];
+    }
+
+    NSValue *key = [NSValue valueWithPointer:context];
+    id store = s_dataStoresByContext[key];
+    if (store) return store;
+
+    // Look up the stable profile UUID registered by Swift
+    NSUUID *profileUUID = s_profileUUIDsByContext ? s_profileUUIDsByContext[key] : nil;
+
+    // Try to create a persistent data store with the profile UUID (macOS 14+)
+    // This gives each profile its own on-disk cookie jar, localStorage, indexedDB, etc.
+    SEL dataStoreForIdSel = sel_registerName("dataStoreForIdentifier:");
+    if (profileUUID && [dataStoreClass respondsToSelector:dataStoreForIdSel]) {
+        typedef id (*DataStoreForIdFn)(Class, SEL, id);
+        store = ((DataStoreForIdFn)objc_msgSend)(dataStoreClass, dataStoreForIdSel, profileUUID);
+        if (store) {
+            s_dataStoresByContext[key] = store;
+            return store;
+        }
+    }
+
+    // Fallback: use nonPersistentDataStore for full isolation (data lost on quit,
+    // but at least profiles won't leak cookies into each other)
+    SEL nonPersistentSel = sel_registerName("nonPersistentDataStore");
+    if ([dataStoreClass respondsToSelector:nonPersistentSel]) {
+        typedef id (*NonPersistentFn)(Class, SEL);
+        store = ((NonPersistentFn)objc_msgSend)(dataStoreClass, nonPersistentSel);
+        if (store) {
+            s_dataStoresByContext[key] = store;
+            return store;
+        }
+    }
+
+    return nil;
+}
 
 static id aurora_get_or_create_pool(WKContextRef context) {
     Class poolClass = objc_getClass("WKProcessPool");
@@ -253,13 +323,13 @@ static id aurora_get_or_create_pool(WKContextRef context) {
         SEL initWithConfigSel = sel_registerName("_initWithConfiguration:");
         if ([poolClass instancesRespondToSelector:initWithConfigSel]) {
             pool = ((id(*)(id, SEL, id))objc_msgSend)([poolClass alloc], initWithConfigSel, poolConfig);
-            fprintf(stderr, "[AuroraBridge] Created WKProcessPool with _WKProcessPoolConfiguration\n");
+            // Pool created with _WKProcessPoolConfiguration
         }
     }
 
     if (!pool) {
         pool = [[poolClass alloc] init];
-        fprintf(stderr, "[AuroraBridge] Created WKProcessPool (default)\n");
+        // Pool created (default)
     }
 
     s_poolsByContext[key] = pool;
@@ -316,7 +386,6 @@ static void aurora_inject_user_scripts(id config) {
     SEL addScriptSel = sel_registerName("addUserScript:");
     if ([ucc respondsToSelector:addScriptSel]) {
         ((void(*)(id, SEL, id))objc_msgSend)(ucc, addScriptSel, script);
-        fprintf(stderr, "[AuroraBridge] Injected image compat user script\n");
     }
 }
 
@@ -339,13 +408,24 @@ void *aurora_view_create_with_context(WKContextRef context) {
     @try {
         id config = [[configClass alloc] init];
 
-        // Share process pool per Space (context) for cookie/session sharing
+        // Share process pool per Profile (context) for cookie/session sharing
         id pool = aurora_get_or_create_pool(context);
         if (pool) {
             SEL setPoolSel = sel_registerName("setProcessPool:");
             if ([config respondsToSelector:setPoolSel]) {
                 typedef void (*SetPoolFn)(id, SEL, id);
                 ((SetPoolFn)objc_msgSend)(config, setPoolSel, pool);
+            }
+        }
+
+        // Set per-profile data store for full cookie/storage isolation
+        id dataStore = aurora_get_or_create_data_store(context);
+        if (dataStore) {
+            SEL setDataStoreSel = sel_registerName("setWebsiteDataStore:");
+            if ([config respondsToSelector:setDataStoreSel]) {
+                typedef void (*SetStoreFn)(id, SEL, id);
+                ((SetStoreFn)objc_msgSend)(config, setDataStoreSel, dataStore);
+                // Per-profile data store set
             }
         }
 
@@ -407,14 +487,12 @@ void *aurora_view_create_with_context(WKContextRef context) {
                 NSString *safariUA = @"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15";
                 typedef void (*SetUAFn)(id, SEL, id);
                 ((SetUAFn)objc_msgSend)(wkWebView, setUASel, safariUA);
-                fprintf(stderr, "[AuroraBridge] Custom Safari user agent set\n");
             }
             // Enable Web Inspector (macOS 13.3+)
             SEL inspectableSel = sel_registerName("setInspectable:");
             if ([wkWebView respondsToSelector:inspectableSel]) {
                 typedef void (*SetInspectableFn)(id, SEL, BOOL);
                 ((SetInspectableFn)objc_msgSend)(wkWebView, inspectableSel, YES);
-                fprintf(stderr, "[AuroraBridge] Web Inspector enabled via setInspectable:\n");
             }
 
             // Also try _setDeveloperExtrasEnabled: on preferences
@@ -438,7 +516,7 @@ void *aurora_view_create_with_context(WKContextRef context) {
                 }
             }
 
-            fprintf(stderr, "[AuroraBridge] WKWebView created successfully\n");
+            // WKWebView created successfully
             return (__bridge_retained void *)wkWebView;
         }
         fprintf(stderr, "[AuroraBridge] ERROR: WKWebView init returned nil\n");
@@ -462,10 +540,7 @@ WKPageRef aurora_view_get_page(void *wkView) {
     if ([view respondsToSelector:sel]) {
         typedef WKPageRef (*PageRefFn)(id, SEL);
         WKPageRef page = ((PageRefFn)objc_msgSend)(view, sel);
-        if (page) {
-            fprintf(stderr, "[AuroraBridge] Got WKPageRef via _pageRefForTransitionToWKWebView\n");
-            return page;
-        }
+        if (page) return page;
     }
 
     // Fallback: try pageRef (WKView)

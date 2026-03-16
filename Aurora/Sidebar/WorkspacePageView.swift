@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 /// A single workspace page showing pinned tabs, bookmarks, and regular tabs.
 struct WorkspacePageView: View {
@@ -6,14 +7,15 @@ struct WorkspacePageView: View {
     let space: Space
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Pinned tabs grid (from profile, shared across workspaces)
-            if let profile = browserState.activeProfile,
+        VStack(alignment: .leading, spacing: 4) {
+            // Pinned tabs grid (from this space's profile)
+            if let profile = space.profile,
                !profile.pinnedTabs.isEmpty {
                 PinnedTabGridView(
                     pinnedTabs: profile.pinnedTabs,
                     spaceID: space.id
                 )
+                .padding(.bottom, 4)
             }
 
             // Workspace header with bookmark toggle
@@ -36,7 +38,7 @@ struct WorkspacePageView: View {
 
             // Normal tabs list
             ForEach(space.tabs.sorted(by: { $0.order < $1.order })) { tab in
-                TabRowView(tab: tab)
+                TabRowView(tab: tab, spaceID: space.id)
             }
 
             Spacer()
@@ -53,26 +55,43 @@ struct WorkspaceHeaderView: View {
     @Environment(BrowserState.self) private var browserState
     let space: Space
 
+    @State private var isHovered = false
+
+    private var isExpanded: Bool {
+        browserState.isBookmarksVisible(for: space.id)
+    }
+
     var body: some View {
-        Button {
+        HStack(spacing: 0) {
+            // Folder icon with animated transition
+            Image(systemName: isExpanded ? "folder.fill" : "folder")
+                .contentTransition(.symbolEffect(.replace))
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Color(hex: space.colorHex) ?? .blue)
+                .frame(width: 18)
+
+            Text(space.name)
+                .font(.system(size: 14, weight: .semibold))
+                .lineLimit(1)
+                .padding(.leading, 6)
+
+            Spacer()
+        }
+        .frame(height: 32)
+        .padding(.horizontal, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(Color.primary.opacity(isHovered ? 0.08 : 0))
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
             browserState.toggleBookmarksVisibility(for: space.id)
-        } label: {
-            HStack(spacing: 6) {
-                Text(space.name)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .textCase(.uppercase)
-
-                Image(systemName: browserState.isBookmarksVisible(for: space.id)
-                      ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-
-                Spacer()
+        }
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovered = hovering
             }
         }
-        .buttonStyle(.plain)
-        .padding(.top, 4)
     }
 }
 
@@ -81,32 +100,63 @@ struct WorkspaceHeaderView: View {
 struct TabRowView: View {
     @Environment(BrowserState.self) private var browserState
     let tab: Tab
+    let spaceID: UUID
+
+    @State private var isHovered = false
 
     private var isActive: Bool {
         tab.id == browserState.activeTabID
     }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 0) {
+            // Favicon placeholder
             Image(systemName: "globe")
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 13))
+                .foregroundStyle(isActive ? .primary : .secondary)
+                .frame(width: 16)
 
+            // Page title
             Text(tab.title)
-                .font(.system(size: 12))
+                .font(.system(size: 13))
                 .lineLimit(1)
+                .padding(.leading, 6)
 
-            Spacer()
+            Spacer(minLength: 0)
+
+            // Close button on hover
+            if isHovered {
+                Button {
+                    let modelContext = PersistenceController.shared.container.mainContext
+                    browserState.closeTab(tab, in: modelContext)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                }
+                .buttonStyle(.hoverButton(size: .small))
+                .transition(.opacity)
+            }
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(isActive ? .white.opacity(0.1) : .clear)
-        )
+        .frame(height: 32)
+        .background {
+            RoundedRectangle(cornerRadius: 5)
+                .fill(.bar)
+                .opacity(isActive ? 1 : 0)
+        }
+        .background {
+            RoundedRectangle(cornerRadius: 5)
+                .fill(Color.primary.opacity(0.08))
+                .opacity(!isActive && isHovered ? 1 : 0)
+        }
         .contentShape(Rectangle())
         .onTapGesture {
             browserState.selectTab(tab)
+        }
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovered = hovering
+            }
         }
     }
 }

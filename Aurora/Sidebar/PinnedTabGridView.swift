@@ -24,12 +24,11 @@ struct PinnedTabGridView: View {
                         ForEach(row) { pinnedTab in
                             PinnedTabCell(
                                 pinnedTab: pinnedTab,
-                                isActive: pinnedTab.id == browserState.activeTabID,
+                                isActive: browserState.activeTab?.url == pinnedTab.url && browserState.activeSpaceID == spaceID,
                                 onTap: {
-                                    browserState.activateContent(
-                                        id: pinnedTab.id,
+                                    browserState.activateBookmarkOrPin(
                                         url: pinnedTab.url,
-                                        spaceID: spaceID
+                                        in: spaceID
                                     )
                                 }
                             )

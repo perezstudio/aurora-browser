@@ -11,13 +11,9 @@ struct ContentPaneView: View {
 
                 ProgressBarView()
 
-                if let tabID = browserState.activeTabID,
-                   let profileID = browserState.activeProfileID {
-                    ActiveWebViewRepresentable(tabID: tabID, profileID: profileID)
-                        .id(tabID)
-                } else {
-                    EmptyContentView()
-                }
+                ActiveWebViewRepresentable(
+                    activeTabID: browserState.activeTabID
+                )
             }
             .background(VisualEffectBackground(material: .contentBackground))
 
