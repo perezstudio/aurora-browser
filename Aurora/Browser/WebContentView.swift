@@ -1,0 +1,82 @@
+import SwiftUI
+import AppKit
+
+struct WebContentView: View {
+    @Environment(BrowserState.self) private var browserState
+
+    var body: some View {
+        Group {
+            if let tabID = browserState.activeTabID, let spaceID = browserState.activeSpaceID {
+                ActiveWebViewRepresentable(tabID: tabID, spaceID: spaceID)
+                    .id(tabID) // Force SwiftUI to recreate when tab changes
+            } else {
+                Color.black
+                    .overlay {
+                        Text("No tab selected")
+                            .foregroundStyle(.secondary)
+                    }
+            }
+        }
+    }
+}
+
+struct ActiveWebViewRepresentable: NSViewRepresentable {
+    let tabID: UUID
+    let spaceID: UUID
+
+    func makeNSView(context: Context) -> AuroraWebViewContainer {
+        let container = AuroraWebViewContainer()
+        container.attachWebView(tabID: tabID, spaceID: spaceID)
+        return container
+    }
+
+    func updateNSView(_ nsView: AuroraWebViewContainer, context: Context) {
+        // Tab changes are handled by .id(tabID) causing a full recreate
+    }
+
+    static func dismantleNSView(_ nsView: AuroraWebViewContainer, coordinator: ()) {
+        nsView.detachWebView()
+    }
+}
+
+// MARK: - Container NSView
+
+final class AuroraWebViewContainer: NSView {
+    private var currentWebView: AuroraWebView?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.black.cgColor
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    @MainActor
+    func attachWebView(tabID: UUID, spaceID: UUID) {
+        let webView = WebViewPool.shared.webView(for: tabID, spaceID: spaceID)
+        webView.navigationDelegate = BrowserState.shared
+        webView.frame = bounds
+        webView.autoresizingMask = [.width, .height]
+        addSubview(webView)
+        currentWebView = webView
+
+        // If the web view has no URL loaded yet, show the new tab page
+        if webView.currentURL == nil || webView.currentURL?.isEmpty == true {
+            webView.loadHTML(NewTabPageHTML.generate())
+        }
+    }
+
+    func detachWebView() {
+        currentWebView?.removeFromSuperview()
+        currentWebView = nil
+    }
+
+    override func layout() {
+        super.layout()
+        currentWebView?.frame = bounds
+    }
+}
