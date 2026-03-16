@@ -7,17 +7,6 @@ struct NavigationBarView: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            // Sidebar toggle (when collapsed)
-            if browserState.isSidebarCollapsed {
-                Button {
-                    browserState.isSidebarCollapsed = false
-                } label: {
-                    Image(systemName: "sidebar.left")
-                        .font(.system(size: 14))
-                }
-                .buttonStyle(.plain)
-            }
-
             // Back
             Button {
                 browserState.activeWebView()?.goBack()

@@ -1,25 +1,6 @@
 import SwiftUI
 import AppKit
 
-struct WebContentView: View {
-    @Environment(BrowserState.self) private var browserState
-
-    var body: some View {
-        Group {
-            if let tabID = browserState.activeTabID, let spaceID = browserState.activeSpaceID {
-                ActiveWebViewRepresentable(tabID: tabID, spaceID: spaceID)
-                    .id(tabID) // Force SwiftUI to recreate when tab changes
-            } else {
-                Color.black
-                    .overlay {
-                        Text("No tab selected")
-                            .foregroundStyle(.secondary)
-                    }
-            }
-        }
-    }
-}
-
 struct ActiveWebViewRepresentable: NSViewRepresentable {
     let tabID: UUID
     let spaceID: UUID

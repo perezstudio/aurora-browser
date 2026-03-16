@@ -9,6 +9,8 @@ final class Bookmark {
     var folderName: String?
     var createdAt: Date
 
+    var space: Space?
+
     init(
         id: UUID = UUID(),
         url: String,

@@ -1,0 +1,293 @@
+# Aurora UI Overhaul — Implementation Plan
+
+## Summary
+
+Replace the SwiftUI-only layout with an AppKit-driven architecture:
+- **Pure AppKit lifecycle** (`@NSApplicationMain`) — no SwiftUI App/Scene/WindowGroup
+- **NSSplitViewController** for the main 2-pane layout (sidebar + content)
+- **NSPageController** for horizontal workspace paging in the sidebar
+- **New Profile model** for pinned tabs shared across workspaces
+- **Inspector** left as-is (already working)
+- **Edge-to-edge** custom styling, no liquid glass
+
+## What Changes vs. What Stays
+
+**Unchanged:**
+- `Aurora/WebKit/*` — C bridge, AuroraWebView, WebViewPool, URLResolver, NewTabPageHTML
+- `Aurora/Persistence/PersistenceController.swift` — minor additions only
+- `Aurora/Persistence/Models/Tab.swift`, `HistoryEntry.swift`
+- `Aurora/CommandBar/CommandBarView.swift` — re-hosted in new layout
+- Inspector behavior — already working
+
+**Deleted:**
+- `Aurora/App/AuroraApp.swift` — replaced by `@NSApplicationMain` on AppDelegate
+- `Aurora/App/ContentView.swift` — replaced by AppKit window controller
+- `Aurora/Browser/BrowserSplitView.swift` — replaced by NSSplitViewController
+
+**Heavily Modified:**
+- `Aurora/App/AppDelegate.swift` — becomes `@NSApplicationMain`, owns window + split view
+- `Aurora/Browser/BrowserState.swift` — add profile support, bookmark toggle state, unified content activation
+- `Aurora/Sidebar/SidebarView.swift` — complete rewrite as workspace pager host
+- `Aurora/Browser/NavigationBarView.swift` — remove sidebar toggle button (NSSplitViewController handles it)
+- `Aurora/Browser/WebContentView.swift` — add lazy init + empty state
+- `Aurora/Persistence/Models/Space.swift` — add bookmarks relationship
+- `Aurora/Persistence/Models/Bookmark.swift` — add optional space relationship
+- `Aurora/Persistence/Models/PinnedTab.swift` — move from Space to Profile relationship
+
+**New Files:**
+- `Aurora/Browser/BrowserWindowController.swift` — NSWindowController + NSSplitViewController
+- `Aurora/Browser/ContentPaneView.swift` — SwiftUI content pane (URL bar + web content + command bar overlay)
+- `Aurora/Sidebar/WorkspacePagerController.swift` — NSPageController wrapper for workspace paging
+- `Aurora/Sidebar/WorkspacePageView.swift` — single workspace page (pinned grid, header, bookmarks, tabs)
+- `Aurora/Sidebar/WorkspaceDockView.swift` — bottom bar with workspace icons + create button
+- `Aurora/Sidebar/PinnedTabGridView.swift` — grid layout for pinned tabs
+- `Aurora/Sidebar/BookmarksSectionView.swift` — toggleable bookmarks with folders
+- `Aurora/Persistence/Models/Profile.swift` — new Profile model owning pinned tabs
+- `Aurora/UI/Utilities/ColorExtensions.swift` — extract Color(hex:) from SidebarView
+
+---
+
+## Phase 1: AppKit Skeleton + Lifecycle Switch
+
+**Goal:** Replace SwiftUI App lifecycle with pure AppKit. Create NSSplitViewController with two panes (sidebar + content). App launches with empty panes.
+
+### 1.1 Create `BrowserWindowController.swift`
+- `BrowserWindowController: NSWindowController` creates NSWindow:
+  - `styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]`
+  - `titlebarAppearsTransparent = true`, `titleVisibility = .hidden`
+  - `backgroundColor = NSColor(red: 0.08, green: 0.08, blue: 0.08, alpha: 1)` (dark, no liquid glass)
+- `BrowserSplitViewController: NSSplitViewController` with two items:
+  - Sidebar: `NSSplitViewItem.sidebarWithViewController(sidebarHosting)` — 260pt default, 200pt min, 360pt max, collapsible
+  - Content: standard `NSSplitViewItem` with `NSHostingController` — min 400pt, not collapsible
+- Each pane wraps `NSHostingController` embedding SwiftUI views
+- Pass `BrowserState` and `ModelContainer` via SwiftUI `.environment()`
+
+### 1.2 Rewrite `AppDelegate.swift`
+- Add `@NSApplicationMain` attribute
+- Remove `@main` from AuroraApp.swift (delete the file)
+- In `applicationDidFinishLaunching`:
+  - Init WebKit bridge
+  - Set dark appearance
+  - Create `BrowserWindowController`, make key and order front
+  - Set up `ModelContainer` from `PersistenceController.shared`
+  - Seed default data
+  - Load BrowserState from store
+- Build menus programmatically via `NSMenu` (File, Edit, View, Developer)
+  - View menu: Toggle Sidebar, Toggle Inspector
+  - Developer menu: Toggle Web Inspector (Opt+Cmd+I)
+  - File menu: New Tab (Cmd+T), Close Tab (Cmd+W), New Workspace
+- Wire notification observers for actions
+
+### 1.3 Delete `AuroraApp.swift` and `ContentView.swift`
+- Move notification handling and onAppear logic into AppDelegate
+- Move command bar overlay into ContentPaneView
+
+### 1.4 Delete `BrowserSplitView.swift`
+- `ProgressBarView` moves into `ContentPaneView`
+
+### 1.5 Verify: App launches with two-pane split, sidebar collapsible
+
+---
+
+## Phase 2: Data Model Updates
+
+**Goal:** Add Profile model, update relationships, add bookmark-workspace scoping.
+
+### 2.1 Create `Profile.swift`
+```swift
+@Model final class Profile {
+    @Attribute(.unique) var id: UUID
+    var name: String
+    var createdAt: Date
+    @Relationship(deleteRule: .cascade, inverse: \PinnedTab.profile)
+    var pinnedTabs: [PinnedTab] = []
+    @Relationship(deleteRule: .nullify, inverse: \Space.profile)
+    var spaces: [Space] = []
+}
+```
+
+### 2.2 Update `PinnedTab.swift`
+- Replace `var space: Space?` with `var profile: Profile?`
+- Pinned tabs now belong to a Profile, shown in all workspaces under that profile
+
+### 2.3 Update `Space.swift`
+- Add `var profile: Profile?` relationship
+- Add `@Relationship(deleteRule: .nullify, inverse: \Bookmark.space) var bookmarks: [Bookmark] = []`
+
+### 2.4 Update `Bookmark.swift`
+- Add `var space: Space?` — bookmarks can be scoped to a workspace (nil = global)
+
+### 2.5 Update `PersistenceController.swift`
+- Add `Profile` to ModelContainer schema
+- Seed a default "Personal" profile with the three default spaces assigned to it
+- Migrate: existing pinned tabs move to the default profile
+
+### 2.6 Verify: Build succeeds, app launches, data seeds correctly
+
+---
+
+## Phase 3: BrowserState Extensions
+
+**Goal:** Extend state for profiles, workspace bookmarks, unified content activation.
+
+### 3.1 Add profile state
+- `activeProfile: Profile?`
+- `activeProfileID: UUID?`
+
+### 3.2 Add bookmark toggle state
+- `bookmarksVisiblePerSpace: [UUID: Bool]` — keyed by space ID
+
+### 3.3 Unified content activation
+- `activateContent(id: UUID, url: String, spaceID: UUID)` — handles Tab, PinnedTab, or Bookmark UUIDs
+- WebView is created from pool on first activation (lazy init)
+- `activeTabID` can now refer to any content type's UUID
+
+### 3.4 Workspace management
+- `createSpace(name:color:icon:in:)`, `deleteSpace(_:in:)` methods
+- `loadFromStore` updated to load profiles and their spaces
+
+### 3.5 Verify: Build succeeds
+
+---
+
+## Phase 4: Content Pane
+
+**Goal:** Build the center pane with lazy WebView init, empty state, command bar overlay.
+
+### 4.1 Create `ContentPaneView.swift`
+```
+ZStack {
+    VStack(spacing: 0) {
+        NavigationBarView().frame(height: 48)
+        ProgressBarView()
+        if activeTabID != nil {
+            WebContentView(tabID:spaceID:)
+        } else {
+            EmptyContentView() // dark bg, Aurora branding
+        }
+    }
+    if isCommandBarVisible {
+        CommandBarOverlay()
+    }
+}
+```
+
+### 4.2 Update `WebContentView.swift`
+- Add `EmptyContentView` for no-tab-selected state
+- WebView created only when tab is activated (not on launch)
+- On tab close: remove WebView from pool
+
+### 4.3 Update `NavigationBarView.swift`
+- Remove sidebar toggle button (NSSplitViewController handles it natively)
+- Keep back/forward/reload/address bar
+
+### 4.4 Verify: Build succeeds, content area shows empty state, shows web content on tab selection
+
+---
+
+## Phase 5: Sidebar — Workspace Pager
+
+**Goal:** Replace the sidebar with horizontal-paging workspace carousel + bottom dock.
+
+### 5.1 Create `WorkspacePagerController.swift`
+- `NSPageController` subclass or wrapper
+- Each page = one workspace's content (NSHostingController wrapping WorkspacePageView)
+- Snap-to-page behavior (NSPageController handles this natively)
+- Programmatic page switching when workspace is selected from dock
+- Bind selectedIndex ↔ BrowserState.activeSpaceID
+
+### 5.2 Create `WorkspacePageView.swift`
+Single workspace page content (top to bottom):
+```
+ScrollView(.vertical) {
+    VStack(alignment: .leading, spacing: 12) {
+        PinnedTabGridView(pinnedTabs: profile.pinnedTabs)
+        WorkspaceHeader(space: space, bookmarksVisible: $visible)
+        if visible { BookmarksSectionView(bookmarks: space.bookmarks) }
+        TabListView(tabs: space.tabs.sorted(by: order))
+    }
+}
+```
+
+### 5.3 Create `PinnedTabGridView.swift`
+- `LazyVGrid(columns: [adaptive(minimum: 56)])` of pinned tab cells
+- Each cell: favicon/globe icon + truncated title
+- Indicator if WebView is active in pool
+- On click: `browserState.activateContent(id:url:spaceID:)`
+
+### 5.4 Create `BookmarksSectionView.swift`
+- Group bookmarks by `folderName` (nil = ungrouped)
+- Folders as disclosure groups
+- Bookmark rows: icon + title, click to activate
+- Optional WebView tie-in (same as pinned tabs)
+
+### 5.5 Create `WorkspaceDockView.swift`
+- Horizontal row of workspace icons (colored circles with SF Symbol)
+- Active workspace: prominent/highlighted (larger, border)
+- Tap: scroll pager to that workspace + set activeSpaceID
+- "+" button: create new workspace
+
+### 5.6 Rewrite `SidebarView.swift`
+- New root: `VStack { WorkspacePagerHost (fills space) / Divider / WorkspaceDockView (52pt) }`
+- `WorkspacePagerHost` = NSViewControllerRepresentable wrapping the NSPageController
+- Extract `Color(hex:)` to `Aurora/UI/Utilities/ColorExtensions.swift`
+- Delete old SpaceSwitcherView, SpaceChip, PinnedTabsView, TabRowView, SidebarBottomBar
+
+### 5.7 Verify: Build succeeds, sidebar pages between workspaces, pinned tabs and bookmarks display correctly
+
+---
+
+## Phase 6: Integration & Polish
+
+### 6.1 Wire menus to actions
+- Cmd+T → new tab in active space
+- Cmd+W → close active tab
+- Cmd+L → focus address bar
+- Cmd+K → toggle command bar
+- Cmd+Shift+L → toggle sidebar
+- Opt+Cmd+I → toggle inspector
+
+### 6.2 Edge-to-edge styling
+- All backgrounds: dark solid colors (no vibrancy/materials)
+- Sidebar background: `#141414`
+- Content background: `#1a1a1a`
+- No system toolbar chrome visible
+- Custom divider styling between panes
+
+### 6.3 Final build verification
+- `xcodebuild build` with zero errors
+- App launches, shows sidebar with workspace pager
+- Clicking a tab loads web content
+- Workspace switching via dock and swipe works
+- Command bar overlay functional
+- Inspector toggle works
+
+---
+
+## Architecture Diagram
+
+```
+@NSApplicationMain AppDelegate
+  └── BrowserWindowController (NSWindowController)
+       └── BrowserSplitViewController (NSSplitViewController)
+            ├── Sidebar Pane (NSHostingController)
+            │    └── SidebarView (SwiftUI)
+            │         ├── WorkspacePagerHost (NSViewControllerRepresentable)
+            │         │    └── NSPageController
+            │         │         └── WorkspacePageView per space (SwiftUI via NSHostingController)
+            │         │              ├── PinnedTabGridView (profile-level)
+            │         │              ├── Workspace Header + Bookmarks toggle
+            │         │              ├── BookmarksSectionView
+            │         │              └── TabListView
+            │         └── WorkspaceDockView (workspace icons + create)
+            │
+            └── Content Pane (NSHostingController)
+                 └── ContentPaneView (SwiftUI)
+                      ├── NavigationBarView (back/fwd/reload/address)
+                      ├── ProgressBarView
+                      ├── WebContentView or EmptyContentView
+                      └── CommandBarOverlay (conditional ZStack)
+
+BrowserState (@Observable singleton) — all runtime state
+WebViewPool (singleton) — WKContextRef per space, AuroraWebView per tab/pinned/bookmark
+```

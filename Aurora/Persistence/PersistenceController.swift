@@ -9,6 +9,7 @@ final class PersistenceController {
 
     private init() {
         let schema = Schema([
+            Profile.self,
             Space.self,
             Tab.self,
             PinnedTab.self,
@@ -26,24 +27,31 @@ final class PersistenceController {
 
     func seedDefaultSpacesIfNeeded() {
         let context = container.mainContext
-        let descriptor = FetchDescriptor<Space>()
 
-        guard let count = try? context.fetchCount(descriptor), count == 0 else { return }
+        // Check if we already have profiles
+        let profileDescriptor = FetchDescriptor<Profile>()
+        if let count = try? context.fetchCount(profileDescriptor), count > 0 { return }
 
-        let spaces: [(String, String, String, Int)] = [
+        // Create default profile
+        let profile = Profile(name: "Personal")
+
+        let spaceDefs: [(String, String, String, Int)] = [
             ("Personal", "#7C6AF7", "person.fill", 0),
             ("Work", "#4A9EF7", "briefcase.fill", 1),
             ("Research", "#F7A84A", "book.fill", 2),
         ]
 
-        for (name, color, icon, order) in spaces {
+        for (name, color, icon, order) in spaceDefs {
             let space = Space(name: name, colorHex: color, iconName: icon, order: order)
+            space.profile = profile
             let tab = Tab(url: "aurora://newtab", title: "New Tab", order: 0)
             tab.space = space
             space.tabs.append(tab)
+            profile.spaces.append(space)
             context.insert(space)
         }
 
+        context.insert(profile)
         try? context.save()
     }
 

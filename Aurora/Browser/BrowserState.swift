@@ -7,10 +7,15 @@ import Observation
 final class BrowserState {
     static let shared = BrowserState()
 
-    // Space & tab state (loaded from SwiftData on launch)
+    // Profile & space state (loaded from SwiftData on launch)
+    var profiles: [Profile] = []
+    var activeProfileID: UUID?
     var spaces: [Space] = []
     var activeSpaceID: UUID?
     var activeTabID: UUID?
+
+    // Bookmark visibility per space
+    var bookmarksVisiblePerSpace: [UUID: Bool] = [:]
 
     // Current page state (synced from active AuroraWebView)
     var currentURL: String?
@@ -29,18 +34,24 @@ final class BrowserState {
     // MARK: - Initialization
 
     func loadFromStore(_ modelContext: ModelContext) {
-        let descriptor = FetchDescriptor<Space>(sortBy: [SortDescriptor(\.order)])
-        spaces = (try? modelContext.fetch(descriptor)) ?? []
+        let profileDescriptor = FetchDescriptor<Profile>()
+        profiles = (try? modelContext.fetch(profileDescriptor)) ?? []
+
+        if let firstProfile = profiles.first {
+            activeProfileID = firstProfile.id
+            spaces = firstProfile.spaces.sorted { $0.order < $1.order }
+        }
 
         if activeSpaceID == nil, let first = spaces.first {
             activeSpaceID = first.id
-            if let firstTab = first.tabs.sorted(by: { $0.order < $1.order }).first {
-                activeTabID = firstTab.id
-            }
         }
     }
 
-    // MARK: - Active Space / Tab
+    // MARK: - Active Profile / Space / Tab
+
+    var activeProfile: Profile? {
+        profiles.first { $0.id == activeProfileID }
+    }
 
     var activeSpace: Space? {
         spaces.first { $0.id == activeSpaceID }
@@ -63,6 +74,29 @@ final class BrowserState {
 
     func selectTab(_ tab: Tab) {
         activeTabID = tab.id
+        syncWebViewState()
+        NotificationCenter.default.post(name: .activeTabChanged, object: nil)
+    }
+
+    // MARK: - Unified Content Activation
+
+    /// Activates any content (Tab, PinnedTab, or Bookmark) by UUID.
+    /// Creates a WebView on demand if one doesn't exist in the pool.
+    func activateContent(id: UUID, url: String, spaceID: UUID) {
+        activeTabID = id
+        activeSpaceID = spaceID
+
+        if !WebViewPool.shared.webViewExists(for: id) {
+            let webView = WebViewPool.shared.webView(for: id, spaceID: spaceID)
+            webView.navigationDelegate = self
+            let resolved = URLResolver.resolve(url)
+            if resolved.scheme == "aurora" && resolved.host == "newtab" {
+                webView.loadHTML(NewTabPageHTML.generate())
+            } else {
+                webView.load(url: resolved)
+            }
+        }
+
         syncWebViewState()
         NotificationCenter.default.post(name: .activeTabChanged, object: nil)
     }
@@ -110,6 +144,34 @@ final class BrowserState {
     func closeActiveTab(in modelContext: ModelContext) {
         guard let tab = activeTab else { return }
         closeTab(tab, in: modelContext)
+    }
+
+    // MARK: - Workspace Management
+
+    func createSpace(name: String, colorHex: String, iconName: String, in modelContext: ModelContext) {
+        guard let profile = activeProfile else { return }
+        let maxOrder = spaces.map(\.order).max() ?? -1
+        let space = Space(name: name, colorHex: colorHex, iconName: iconName, order: maxOrder + 1)
+        space.profile = profile
+        let tab = Tab(url: "aurora://newtab", title: "New Tab", order: 0)
+        tab.space = space
+        space.tabs.append(tab)
+        profile.spaces.append(space)
+        modelContext.insert(space)
+        try? modelContext.save()
+
+        spaces = profile.spaces.sorted { $0.order < $1.order }
+        selectSpace(space)
+    }
+
+    // MARK: - Bookmark Visibility
+
+    func isBookmarksVisible(for spaceID: UUID) -> Bool {
+        bookmarksVisiblePerSpace[spaceID] ?? true
+    }
+
+    func toggleBookmarksVisibility(for spaceID: UUID) {
+        bookmarksVisiblePerSpace[spaceID] = !(bookmarksVisiblePerSpace[spaceID] ?? true)
     }
 
     // MARK: - Navigation

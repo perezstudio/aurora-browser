@@ -9,7 +9,7 @@ final class PinnedTab {
     var faviconData: Data?
     var order: Int
 
-    var space: Space?
+    var profile: Profile?
 
     init(
         id: UUID = UUID(),

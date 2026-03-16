@@ -10,11 +10,13 @@ final class Space {
     var order: Int
     var createdAt: Date
 
+    var profile: Profile?
+
     @Relationship(deleteRule: .cascade, inverse: \Tab.space)
     var tabs: [Tab] = []
 
-    @Relationship(deleteRule: .cascade, inverse: \PinnedTab.space)
-    var pinnedTabs: [PinnedTab] = []
+    @Relationship(deleteRule: .nullify, inverse: \Bookmark.space)
+    var bookmarks: [Bookmark] = []
 
     init(
         id: UUID = UUID(),
