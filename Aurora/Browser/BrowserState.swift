@@ -81,6 +81,7 @@ final class BrowserState {
 
     func selectTab(_ tab: Tab) {
         activeTabID = tab.id
+        ExtensionManager.shared.activateTab(tab.id)
     }
 
     // MARK: - Bookmark / Pin Activation
@@ -222,6 +223,11 @@ extension BrowserState: AuroraWebViewNavigationDelegate {
                 tab.url = url
                 tab.lastVisited = Date()
                 PersistenceController.shared.save()
+
+                // Update extension tab state
+                if let tabID = activeTabID {
+                    ExtensionManager.shared.updateTabURL(tabID, url: url)
+                }
             }
         }
     }
@@ -232,6 +238,11 @@ extension BrowserState: AuroraWebViewNavigationDelegate {
             if let title, !title.isEmpty {
                 tab.title = title
                 PersistenceController.shared.save()
+
+                // Update extension tab state
+                if let tabID = activeTabID {
+                    ExtensionManager.shared.updateTabTitle(tabID, title: title)
+                }
             }
         }
     }
@@ -240,6 +251,11 @@ extension BrowserState: AuroraWebViewNavigationDelegate {
         MainActor.assumeIsolated {
             guard let tab = activeTab, isActiveWebView(webView) else { return }
             tab.isLoading = isLoading
+
+            // Update extension tab state
+            if let tabID = activeTabID {
+                ExtensionManager.shared.updateTabLoading(tabID, isLoading: isLoading)
+            }
         }
     }
 

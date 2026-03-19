@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 struct NavigationBarView: View {
     @Environment(BrowserState.self) private var browserState
@@ -20,9 +21,15 @@ private struct NavigationBarContent: View {
     @Environment(BrowserState.self) private var browserState
     @State private var addressText: String = ""
     @FocusState private var isAddressBarFocused: Bool
+    @State private var showExtensionsPopover: Bool = false
 
     private var isDevMode: Bool {
         tab.url.contains("localhost") || tab.url.contains("127.0.0.1")
+    }
+
+    private var hasActiveExtensions: Bool {
+        guard let profileID = browserState.activeProfileID else { return false }
+        return ExtensionManager.shared.enabledExtensionCount(for: profileID) > 0
     }
 
     var body: some View {
@@ -101,6 +108,20 @@ private struct NavigationBarContent: View {
                 .help("Console")
             }
 
+            // Extensions
+            if hasActiveExtensions {
+                Button {
+                    showExtensionsPopover.toggle()
+                } label: {
+                    Image(systemName: "puzzlepiece.extension")
+                }
+                .buttonStyle(.hoverButton(size: .large))
+                .help("Extensions")
+                .popover(isPresented: $showExtensionsPopover, arrowEdge: .bottom) {
+                    ExtensionsPopoverView()
+                }
+            }
+
             Spacer()
         }
         .padding(.horizontal, 12)
@@ -141,5 +162,93 @@ struct AddressBarView: View {
             .onSubmit {
                 onCommit()
             }
+    }
+}
+
+// MARK: - Extensions Popover
+
+struct ExtensionsPopoverView: View {
+    @Environment(BrowserState.self) private var browserState
+    @Environment(\.modelContext) private var modelContext
+    @State private var hoveredID: UUID?
+
+    private var extensions: [InstalledExtension] {
+        guard let profileID = browserState.activeProfileID else { return [] }
+        var descriptor = FetchDescriptor<InstalledExtension>(
+            predicate: #Predicate { $0.profileID == profileID && $0.isEnabled == true }
+        )
+        descriptor.sortBy = [SortDescriptor(\.name)]
+        return (try? modelContext.fetch(descriptor)) ?? []
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Extensions")
+                .font(.system(size: 13, weight: .semibold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+
+            Divider()
+
+            if extensions.isEmpty {
+                Text("No extensions enabled")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+            } else {
+                ForEach(extensions) { ext in
+                    Button {
+                        triggerExtension(ext)
+                    } label: {
+                        HStack(spacing: 8) {
+                            if let data = ext.iconData, let nsImage = NSImage(data: data) {
+                                Image(nsImage: nsImage)
+                                    .resizable()
+                                    .frame(width: 20, height: 20)
+                            } else {
+                                extensionPlaceholderIcon
+                            }
+
+                            Text(ext.name)
+                                .font(.system(size: 13))
+                                .lineLimit(1)
+
+                            Spacer()
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(hoveredID == ext.id ? Color.white.opacity(0.1) : .clear)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { isHovered in
+                        hoveredID = isHovered ? ext.id : nil
+                    }
+                }
+            }
+        }
+        .frame(width: 220)
+        .padding(.vertical, 4)
+    }
+
+    private func triggerExtension(_ ext: InstalledExtension) {
+        guard let profileID = browserState.activeProfileID else { return }
+        let tabID = browserState.activeTabID
+        ExtensionManager.shared.performAction(
+            bundleIdentifier: ext.bundleIdentifier,
+            profileID: profileID,
+            tabID: tabID
+        )
+    }
+
+    private var extensionPlaceholderIcon: some View {
+        Image(systemName: "puzzlepiece.extension")
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+            .frame(width: 20, height: 20)
     }
 }

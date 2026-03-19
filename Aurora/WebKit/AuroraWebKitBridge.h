@@ -100,4 +100,133 @@ void aurora_page_install_navigation_callbacks(WKPageRef page,
                                                void *clientInfo,
                                                AuroraNavigationCallback onStateChanged);
 
+// Set a custom user agent on a live WKWebView.
+void aurora_view_set_custom_user_agent(void *wkView, const char *userAgent);
+
+// ---------------------------------------------------------------------------
+// Extension support — user scripts, content rules, and script message handlers
+// ---------------------------------------------------------------------------
+
+// Add a WKUserScript to a live view's WKUserContentController.
+// injectionTime: 0 = WKUserScriptInjectionTimeAtDocumentStart,
+//                1 = WKUserScriptInjectionTimeAtDocumentEnd
+void aurora_view_add_user_script(void *wkView, const char *source, int injectionTime, bool mainFrameOnly);
+
+// Remove all user scripts from the view's content controller.
+// NOTE: WKUserContentController does not support removing individual scripts.
+// After calling this, re-add the image compat script and any extension scripts.
+void aurora_view_remove_all_user_scripts(void *wkView);
+
+// Re-inject the built-in image compatibility script onto a view.
+// Call after aurora_view_remove_all_user_scripts to restore base functionality.
+void aurora_view_reinject_image_compat_script(void *wkView);
+
+// Compile a WKContentRuleList from a JSON string (async).
+// The callback fires on the main thread with the compiled rule list pointer
+// (or NULL on failure) and an error message (or NULL on success).
+typedef void (*AuroraContentRuleCallback)(void *context, void *ruleList, const char *error);
+void aurora_compile_content_rules(const char *identifier,
+                                  const char *jsonRules,
+                                  void *context,
+                                  AuroraContentRuleCallback callback);
+
+// Add a compiled WKContentRuleList to a view's content controller.
+void aurora_view_add_content_rule_list(void *wkView, void *ruleList);
+
+// Remove all content rule lists from a view's content controller.
+void aurora_view_remove_all_content_rule_lists(void *wkView);
+
+// Script message handler callback — called when JS posts a message.
+// messageName is the handler name, messageBody is the JSON-serialized message.
+typedef void (*AuroraScriptMessageCallback)(void *context, const char *messageName, const char *messageBody);
+
+// Register a named script message handler on the view's content controller.
+// JS calls: window.webkit.messageHandlers.<name>.postMessage(...)
+void aurora_view_add_script_message_handler(void *wkView,
+                                             const char *name,
+                                             void *context,
+                                             AuroraScriptMessageCallback callback);
+
+// Remove a named script message handler from the view's content controller.
+void aurora_view_remove_script_message_handler(void *wkView, const char *name);
+
+// ---------------------------------------------------------------------------
+// Safari Web Extension support (macOS 15.4+)
+// ---------------------------------------------------------------------------
+
+// Extension controller — manages loaded extensions for a profile.
+// Returns a WKWebExtensionController* (retained) or NULL if unavailable.
+void *aurora_ext_controller_create(void);
+void aurora_ext_controller_release(void *controller);
+
+// Load extension from .appex bundle path into a controller.
+// Returns a WKWebExtensionContext* (retained) or NULL on error.
+void *aurora_ext_load_extension(void *controller, const char *appexPath);
+
+// Unload an extension context from its controller.
+void aurora_ext_unload_extension(void *controller, void *contextPtr);
+
+// Query extension metadata from .appex path (creates temporary WKWebExtension).
+// Returned strings are malloc'd — caller must free().
+const char *aurora_ext_get_display_name(const char *appexPath);
+const char *aurora_ext_get_version(const char *appexPath);
+// Returns NSImage* (retained) or NULL.
+void *aurora_ext_get_icon(const char *appexPath, int size);
+// Returns JSON array string of requested permissions. Caller must free().
+const char *aurora_ext_get_permissions(const char *appexPath);
+// Returns the extension description. Caller must free().
+const char *aurora_ext_get_description(const char *appexPath);
+
+// Grant permissions on a loaded extension context.
+// permissionsJSON is a JSON array of permission strings.
+void aurora_ext_grant_permissions(void *contextPtr, const char *permissionsJSON);
+
+// View creation with extension controller on config.
+// The controller's presence on the WKWebViewConfiguration enables extension features.
+void *aurora_view_create_with_context_and_extensions(WKContextRef context, void *extController);
+
+// --- Extension Tab (conforms to WKWebExtensionTab) ---
+void *aurora_ext_tab_create(void *wkWebView);
+void aurora_ext_tab_release(void *tab);
+void aurora_ext_tab_set_url(void *tab, const char *url);
+void aurora_ext_tab_set_title(void *tab, const char *title);
+void aurora_ext_tab_set_active(void *tab, bool active);
+void aurora_ext_tab_set_pinned(void *tab, bool pinned);
+void aurora_ext_tab_set_loading(void *tab, bool loading);
+void aurora_ext_tab_set_window(void *tab, void *window);
+void aurora_ext_tab_set_size(void *tab, double width, double height);
+
+// --- Extension Window (conforms to WKWebExtensionWindow) ---
+void *aurora_ext_window_create(void);
+void aurora_ext_window_release(void *window);
+void aurora_ext_window_add_tab(void *window, void *tab);
+void aurora_ext_window_remove_tab(void *window, void *tab);
+void aurora_ext_window_set_active_tab(void *window, void *tab);
+void aurora_ext_window_set_active(void *window, bool active);
+void aurora_ext_window_set_frame(void *window, double x, double y, double w, double h);
+
+// --- Controller event notifications ---
+void aurora_ext_controller_did_open_tab(void *controller, void *tab);
+void aurora_ext_controller_did_close_tab(void *controller, void *tab);
+void aurora_ext_controller_did_activate_tab(void *controller, void *tab);
+void aurora_ext_controller_did_open_window(void *controller, void *window);
+void aurora_ext_controller_did_close_window(void *controller, void *window);
+void aurora_ext_controller_did_focus_window(void *controller, void *window);
+
+// --- Controller delegate callbacks ---
+typedef void (*AuroraExtPermissionCallback)(void *ctx, const char *extDisplayName, const char *permsJSON);
+typedef void (*AuroraExtTabActionCallback)(void *ctx, void *extContext, void *tabRef);
+
+void aurora_ext_controller_set_callbacks(void *controller, void *swiftCtx,
+    AuroraExtPermissionCallback onPermPrompt,
+    AuroraExtTabActionCallback onAction);
+
+// Perform the extension's browser action (popup or background action) for a tab.
+void aurora_ext_perform_action(void *contextPtr, void *tabPtr);
+// Get the popup page URL for the extension's action (returns malloc'd or NULL).
+const char *aurora_ext_get_action_popup_url(void *contextPtr);
+
+// Check if the Safari Web Extension APIs are available at runtime.
+bool aurora_ext_is_available(void);
+
 #endif /* AuroraWebKitBridge_h */

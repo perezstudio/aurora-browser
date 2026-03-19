@@ -30,6 +30,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let modelContext = PersistenceController.shared.container.mainContext
         BrowserState.shared.loadFromStore(modelContext)
 
+        // Initialize Safari Web Extension controllers and load enabled extensions
+        for profile in BrowserState.shared.profiles {
+            ExtensionManager.shared.createController(for: profile.id)
+            ExtensionManager.shared.loadEnabledExtensions(for: profile.id, modelContext: modelContext)
+        }
+
         // Create and show the main window
         let wc = BrowserWindowController(
             browserState: BrowserState.shared,

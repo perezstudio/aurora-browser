@@ -15,6 +15,7 @@ final class PersistenceController {
             PinnedTab.self,
             HistoryEntry.self,
             Bookmark.self,
+            InstalledExtension.self,
         ])
 
         // Store in Application Support/Aurora/Aurora.store
@@ -28,7 +29,18 @@ final class PersistenceController {
         do {
             container = try ModelContainer(for: schema, configurations: [configuration])
         } catch {
-            fatalError("Failed to create ModelContainer: \(error)")
+            // Schema mismatch — destroy old store and recreate (pre-release only)
+            try? FileManager.default.removeItem(at: storeURL)
+            // Also remove WAL/SHM files
+            let walURL = storeURL.appendingPathExtension("wal")
+            let shmURL = storeURL.appendingPathExtension("shm")
+            try? FileManager.default.removeItem(at: walURL)
+            try? FileManager.default.removeItem(at: shmURL)
+            do {
+                container = try ModelContainer(for: schema, configurations: [configuration])
+            } catch {
+                fatalError("Failed to create ModelContainer after reset: \(error)")
+            }
         }
     }
 

@@ -5,12 +5,14 @@ enum SettingsTab: String, CaseIterable {
     case general = "General"
     case profiles = "Profiles"
     case spaces = "Spaces"
+    case extensions = "Extensions"
 
     var icon: String {
         switch self {
         case .general: "gearshape"
         case .profiles: "person.crop.circle"
         case .spaces: "square.stack"
+        case .extensions: "puzzlepiece.extension"
         }
     }
 }
@@ -18,11 +20,20 @@ enum SettingsTab: String, CaseIterable {
 struct SettingsView: View {
     @State private var selectedTab: SettingsTab = .general
 
+    private var visibleTabs: [SettingsTab] {
+        SettingsTab.allCases.filter { tab in
+            if tab == .extensions {
+                return aurora_ext_is_available()
+            }
+            return true
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Tab bar
             HStack(spacing: 0) {
-                ForEach(SettingsTab.allCases, id: \.self) { tab in
+                ForEach(visibleTabs, id: \.self) { tab in
                     SettingsTabButton(tab: tab, isSelected: selectedTab == tab) {
                         selectedTab = tab
                     }
@@ -43,6 +54,8 @@ struct SettingsView: View {
                     ProfilesSettingsView()
                 case .spaces:
                     SpacesSettingsView()
+                case .extensions:
+                    ExtensionsSettingsView()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

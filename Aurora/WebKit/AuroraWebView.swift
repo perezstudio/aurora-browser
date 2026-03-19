@@ -31,10 +31,14 @@ final class AuroraWebView: NSView {
     @objc dynamic var canGoBack: Bool = false
     @objc dynamic var canGoForward: Bool = false
 
-    init(contextRef: WKContextRef) {
+    init(contextRef: WKContextRef, extensionController: UnsafeMutableRawPointer? = nil) {
         super.init(frame: .zero)
 
-        wkViewPtr = aurora_view_create_with_context(contextRef)
+        if let extensionController {
+            wkViewPtr = aurora_view_create_with_context_and_extensions(contextRef, extensionController)
+        } else {
+            wkViewPtr = aurora_view_create_with_context(contextRef)
+        }
 
         guard let wkViewPtr else {
             NSLog("[AuroraWebView] Failed to create WKWebView")
@@ -182,12 +186,20 @@ final class AuroraWebView: NSView {
         }
     }
 
+    // MARK: - Internal Access
+
+    /// Get a non-owning pointer to the underlying WKWebView for ObjC bridge calls.
+    /// Exposed internally for ExtensionManager to inject scripts/handlers.
+    var viewPointer: UnsafeMutableRawPointer? {
+        guard let wkView else { return nil }
+        return Unmanaged.passUnretained(wkView).toOpaque()
+    }
+
     // MARK: - Private
 
     /// Get a non-owning pointer to the underlying WKWebView for ObjC bridge calls
     private var viewPtr: UnsafeMutableRawPointer? {
-        guard let wkView else { return nil }
-        return Unmanaged.passUnretained(wkView).toOpaque()
+        viewPointer
     }
 
     // MARK: - State Polling

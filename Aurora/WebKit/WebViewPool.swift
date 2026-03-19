@@ -8,6 +8,8 @@ final class WebViewPool {
     private var contexts: [UUID: WKContextRef] = [:]
     private var webViews: [UUID: AuroraWebView] = [:]
     private var lastAccessed: [UUID: Date] = [:]
+    /// Track which profile each tab belongs to
+    private var tabProfiles: [UUID: UUID] = [:]
 
     private init() {}
 
@@ -20,7 +22,6 @@ final class WebViewPool {
         guard let ctx = aurora_context_create() else {
             fatalError("[WebViewPool] Failed to create WKContext for profile \(profileID)")
         }
-        // Register the profile's stable UUID so the data store persists across launches
         let uuidString = profileID.uuidString
         uuidString.withCString { cStr in
             aurora_context_set_profile_uuid(ctx, cStr)
@@ -43,15 +44,41 @@ final class WebViewPool {
             return existing
         }
         let ctx = context(for: profileID)
-        let view = AuroraWebView(contextRef: ctx)
+
+        // Use extension-aware view creation if an extension controller exists
+        let extController = ExtensionManager.shared.controller(for: profileID)
+        let view: AuroraWebView
+        if let extController {
+            view = AuroraWebView(contextRef: ctx, extensionController: extController)
+        } else {
+            view = AuroraWebView(contextRef: ctx)
+        }
+
         webViews[tabID] = view
+        tabProfiles[tabID] = profileID
         lastAccessed[tabID] = Date()
+
+        // Register tab with extension system
+        ExtensionManager.shared.registerTab(tabID, webView: view, profileID: profileID)
+
         return view
     }
 
     func removeWebView(for tabID: UUID) {
+        // Unregister from extension system
+        ExtensionManager.shared.unregisterTab(tabID)
+
         webViews.removeValue(forKey: tabID)
         lastAccessed.removeValue(forKey: tabID)
+        tabProfiles.removeValue(forKey: tabID)
+    }
+
+    /// Returns all active web views that belong to a given profile.
+    func allWebViews(for profileID: UUID) -> [(tabID: UUID, webView: AuroraWebView)] {
+        tabProfiles.compactMap { tabID, pid in
+            guard pid == profileID, let view = webViews[tabID] else { return nil }
+            return (tabID, view)
+        }
     }
 
     func webViewExists(for tabID: UUID) -> Bool {
